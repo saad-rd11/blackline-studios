@@ -1,5 +1,0 @@
-pages_build_output_dir = "dist"
-compatibility_date = "2026-06-09"
-
-[functions]
-external = ["@aws-sdk/client-s3"]

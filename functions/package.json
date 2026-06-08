@@ -1,0 +1,7 @@
+{
+  "name": "blackline-functions",
+  "private": true,
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.800.0"
+  }
+}

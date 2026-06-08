@@ -4,7 +4,7 @@ import {
   ChevronRight, ChevronLeft, Check, X, Send, Copy, Lock, Eye, EyeOff,
   ArrowRight, Ban, Calendar, Clock, Leaf, Flame, Bolt, Star, Trophy, Users,
   DollarSign, LayoutDashboard, Ticket, TrendingUp, LogOut, Plus, Trash2,
-  ChevronUp, ChevronDown, Layers, Package, Image, Search, ExternalLink,
+  ChevronUp, ChevronDown, Layers, Package, Image, Search,
 } from "lucide-react";
 import {
   getConfig, setConfigItems, setSettings,
@@ -122,6 +122,16 @@ const InlineInput = ({value,onChange,type="text",min,style={}}) => (
     style={{background:"rgba(255,255,255,0.05)",border:`1px solid ${C.b0}`,borderRadius:6,color:C.tx,fontSize:13,padding:"5px 9px",outline:"none",width:"100%",...style}}
     onFocus={e=>e.target.style.borderColor=C.p} onBlur={e=>e.target.style.borderColor=C.b0}/>
 );
+const BackBtn = ({onClick,label="Back"}) => {
+  const [hov, setHov] = useState(false);
+  return (
+    <button onClick={onClick}
+      onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
+      style={{display:"inline-flex",alignItems:"center",gap:4,padding:"5px 10px",borderRadius:6,fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit",background:hov?C.s1:"transparent",border:`1px solid ${hov?C.b1:C.b0}`,color:hov?C.tx:C.mu,transition:"all .15s"}}>
+      <ChevronLeft size={14}/>{label}
+    </button>
+  );
+};
 
 export default function App() {
   const [view, setView]         = useState("studio");
@@ -153,12 +163,12 @@ export default function App() {
   const [dashTab, setDashTab] = useState("orders");
 
   const [showNewPort, setShowNewPort] = useState(false);
-  const [newPort, setNewPort] = useState({title:"",cat:"",code:"",plays:"",rating:"5.0",iconKey:"Wind",gradIdx:0,imageUrl:""});
+  const [newPort, setNewPort] = useState({title:"",cat:"",code:"",plays:"",rating:"5.0",iconKey:"Wind",gradIdx:0,file:null});
   const [showNewAddon, setShowNewAddon] = useState(false);
   const [newAddon, setNewAddon] = useState({lbl:"",price:""});
   const [showNewType, setShowNewType] = useState(false);
   const [newType, setNewType] = useState({lbl:"",iconKey:"Zap",base:"",dur:"",desc:""});
-  const [portUrlEdit, setPortUrlEdit] = useState(null);
+  const [uploading, setUploading] = useState(null);
 
   const quizRef = useRef(null);
 
@@ -250,6 +260,38 @@ export default function App() {
       });
     } catch {}
   }
+  async function resizeAndUpload(file) {
+    try {
+      const img = await new Promise((res, rej) => {
+        const i = new window.Image();
+        i.onload = () => res(i);
+        i.onerror = rej;
+        i.src = URL.createObjectURL(file);
+      });
+      const MAX = 600;
+      const scale = Math.min(MAX / img.width, 1);
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(img.src);
+      const blob = await new Promise(res => canvas.toBlob(res, "image/webp", 80));
+      if (import.meta.env.DEV) {
+        return URL.createObjectURL(blob);
+      }
+      const fd = new FormData();
+      fd.append("image", blob, "thumb.webp");
+      const resp = await fetch("/api/upload", { method: "POST", body: fd });
+      const data = await resp.json();
+      return data.url;
+    } catch (e) {
+      console.error("Upload failed:", e);
+      return "";
+    }
+  }
   function resetQuiz() { setQuiz(Q_BLANK); setContact(C_BLANK); setSubmitted(null); setQuizStep(1); }
 
   async function advance(id) {
@@ -278,21 +320,42 @@ export default function App() {
   }
   function togglePortVis(id) { setPort(portfolio.map(p => p.id===id ? {...p,visible:!p.visible} : p)); }
   function removePort(id)    { setPort(portfolio.filter(p=>p.id!==id)); }
-  function addPort() {
+  async function addPort() {
     if (!newPort.title.trim()) return;
-    const maxOrder = portfolio.reduce((m,p)=>Math.max(m,p.order),0);
-    setPort([...portfolio, {
-      id:"p"+nid(), order:maxOrder+1, visible:true,
-      cat:newPort.cat||"Maps", title:newPort.title, code:newPort.code||"0000-0000-0000",
-      plays:newPort.plays||"0", rating:parseFloat(newPort.rating)||5.0,
-      grad:GRADS[newPort.gradIdx]||GRADS[0], iconKey:newPort.iconKey||"Wind",
-      imageUrl: newPort.imageUrl || "",
-    }]);
-    setNewPort({title:"",cat:"",code:"",plays:"",rating:"5.0",iconKey:"Wind",gradIdx:0,imageUrl:""});
+    setUploading("upload");
+    try {
+      let imageUrl = "";
+      if (newPort.file) {
+        imageUrl = await resizeAndUpload(newPort.file);
+      }
+      const maxOrder = portfolio.reduce((m,p)=>Math.max(m,p.order),0);
+      setPort([...portfolio, {
+        id:"p"+nid(), order:maxOrder+1, visible:true,
+        cat:newPort.cat||"Maps", title:newPort.title, code:newPort.code||"0000-0000-0000",
+        plays:newPort.plays||"0", rating:parseFloat(newPort.rating)||5.0,
+        grad:GRADS[newPort.gradIdx]||GRADS[0], iconKey:newPort.iconKey||"Wind",
+        imageUrl,
+      }]);
+    } catch {}
+    setNewPort({title:"",cat:"",code:"",plays:"",rating:"5.0",iconKey:"Wind",gradIdx:0,file:null});
     setShowNewPort(false);
+    setUploading(null);
   }
-  function updatePortUrl(id, url) {
-    setPort(portfolio.map(p => p.id===id ? {...p, imageUrl: url} : p));
+  async function uploadPortImage(id) {
+    setUploading(id);
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.onchange = async () => {
+      const file = input.files[0];
+      if (!file) { setUploading(null); return; }
+      try {
+        const url = await resizeAndUpload(file);
+        setPort(portfolio.map(p => p.id===id ? {...p, imageUrl: url} : p));
+      } catch {}
+      setUploading(null);
+    };
+    input.click();
   }
 
   function updateAddon(id, field, val) { setAddons(addons.map(a=>a.id===id?{...a,[field]:val}:a)); }
@@ -332,12 +395,18 @@ export default function App() {
   const curPortItem = visPort[cycleIdx % Math.max(visPort.length,1)];
 
   return (
-    <div style={{minHeight:"100vh",background:C.bg,...gridBg,fontFamily:"'DM Sans',sans-serif"}}>
+    <div style={{minHeight:"100vh",background:C.bg,...gridBg,fontFamily:"'DM Sans',sans-serif",position:"relative",overflow:"hidden"}}>
+
+      <div aria-hidden="true" style={{position:"fixed",top:"-20%",left:"-10%",width:"50vw",height:"50vw",borderRadius:"50%",background:"radial-gradient(circle,rgba(88,101,242,.15) 0%,transparent 70%)",animation:"orb 12s ease-in-out infinite",pointerEvents:"none",zIndex:0}}/>
+      <div aria-hidden="true" style={{position:"fixed",bottom:"-10%",right:"-5%",width:"40vw",height:"40vw",borderRadius:"50%",background:"radial-gradient(circle,rgba(0,212,255,.1) 0%,transparent 70%)",animation:"orb 16s ease-in-out infinite reverse",pointerEvents:"none",zIndex:0}}/>
+      <div aria-hidden="true" style={{position:"fixed",top:"40%",left:"50%",width:"30vw",height:"30vw",borderRadius:"50%",background:"radial-gradient(circle,rgba(192,132,252,.08) 0%,transparent 70%)",animation:"orb 14s ease-in-out infinite 2s",pointerEvents:"none",zIndex:0}}/>
+
+      <div style={{position:"relative",zIndex:1}}>
 
       <div style={{position:"sticky",top:0,zIndex:50,background:`${C.bg}f0`,backdropFilter:"blur(16px)",borderBottom:`1px solid ${C.b0}`,height:54,display:"flex",alignItems:"center",padding:"0 20px",gap:10}}>
         <div onClick={()=>{setView("studio");resetQuiz();}} style={{display:"flex",alignItems:"center",gap:8,flex:1,cursor:"pointer"}}>
           <div style={{width:28,height:28,background:`linear-gradient(135deg,${C.p},${C.a})`,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center"}}><Zap size={15} color="#fff"/></div>
-          <span style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:16,letterSpacing:2}}>UEFN STUDIO</span>
+          <span style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:16,letterSpacing:2}}>BLACKLINE STUDIO</span>
           <span style={{background:bookingOpen?C.grBg:C.reBg,color:bookingOpen?C.gr:C.re,fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:99,border:`1px solid ${(bookingOpen?C.gr:C.re)}44`,letterSpacing:.5,animation:bookingOpen?"pulse 2.5s ease-in-out infinite":"none"}}>
             {"\u25cf"} {bookingOpen?"OPEN":"CLOSED"}
           </span>
@@ -369,7 +438,7 @@ export default function App() {
               <p className="fu2" style={{color:C.mu,fontSize:15,maxWidth:500,margin:"0 auto 26px"}}>No DM-for-price. No back-and-forth. Answer four quick questions, see your estimate instantly, and place your order.</p>
               <div className="fu3" style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
                 <button onClick={()=>{ setView("studio"); setTimeout(()=>quizRef.current?.scrollIntoView({behavior:"smooth",block:"start"}),50); }}
-                  style={{display:"flex",alignItems:"center",gap:7,padding:"12px 26px",borderRadius:9,fontSize:14,fontWeight:700,cursor:"pointer",background:`linear-gradient(135deg,${C.p},${C.a})`,border:"none",color:"#fff",fontFamily:"inherit"}}>
+                  className="glow-btn" style={{display:"flex",alignItems:"center",gap:7,padding:"12px 26px",borderRadius:9,fontSize:14,fontWeight:700,cursor:"pointer",background:`linear-gradient(135deg,${C.p},${C.a})`,border:"none",color:"#fff",fontFamily:"inherit"}}>
                   Place an Order <ArrowRight size={15}/>
                 </button>
                 <button onClick={()=>setView("track")} style={{display:"flex",alignItems:"center",gap:7,padding:"12px 22px",borderRadius:9,fontSize:14,fontWeight:600,cursor:"pointer",background:"transparent",border:`1px solid ${C.b1}`,color:C.mu,fontFamily:"inherit"}}>
@@ -395,14 +464,12 @@ export default function App() {
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",minHeight:220}}>
                       <div style={{background:curPortItem.imageUrl ? `url(${curPortItem.imageUrl}) center/cover` : `linear-gradient(135deg,${curPortItem.grad[0]},${curPortItem.grad[1]})`,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10,padding:28,position:"relative"}}>
                         {!curPortItem.imageUrl && (() => { const Ic = ICON_MAP[curPortItem.iconKey]||Wind; return <Ic size={52} color="rgba(255,255,255,.9)"/>; })()}
-                        <span style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:13,letterSpacing:2,color:"rgba(255,255,255,.7)",textTransform:"uppercase"}}>{curPortItem.cat}</span>
                         <div style={{position:"absolute",bottom:12,display:"flex",gap:5}}>
                           {visPort.map((_,i)=><div key={i} style={{width:i===cycleIdx%visPort.length?18:6,height:6,borderRadius:99,background:i===cycleIdx%visPort.length?"#fff":"rgba(255,255,255,.3)",transition:"all .3s"}}/>)}
                         </div>
                       </div>
                       <div style={{padding:28,display:"flex",flexDirection:"column",justifyContent:"center",gap:14}}>
                         <div>
-                          <div style={{fontSize:11,fontWeight:700,color:C.di,letterSpacing:1,textTransform:"uppercase",marginBottom:5}}>{curPortItem.cat}</div>
                           <h3 style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:26,lineHeight:1.1,marginBottom:6}}>{curPortItem.title}</h3>
                           <div style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:C.mu}}>
                             <Star size={12} fill={C.gold} color={C.gold}/> <strong style={{color:C.gold}}>{curPortItem.rating.toFixed(1)}</strong> {"\u00a0\u00b7\u00a0"} <Users size={12}/> {curPortItem.plays} plays
@@ -427,6 +494,7 @@ export default function App() {
                 <Sparkles size={14} color={C.p}/><span style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:18,letterSpacing:.5}}>Get your order estimate</span>
               </div>
 
+              <div style={{minHeight:490}}>
               {quizStep < 5 && (
                 <div style={{display:"flex",gap:6,marginBottom:24,justifyContent:"center"}}>
                   {[1,2,3,4].map(s=>(
@@ -462,7 +530,7 @@ export default function App() {
               {quizStep===2 && (
                 <div key="s2" className="fu">
                   <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:5}}>
-                    <button onClick={()=>setQuizStep(1)} style={{background:"none",border:"none",color:C.mu,cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontSize:13,fontFamily:"inherit"}}><ChevronLeft size={14}/>Back</button>
+                    <BackBtn onClick={()=>setQuizStep(1)}/>
                   </div>
                   <h2 style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:24,marginBottom:5}}>How detailed does it need to be?</h2>
                   <p style={{color:C.mu,fontSize:13,marginBottom:20}}>This is the biggest price driver.</p>
@@ -484,7 +552,7 @@ export default function App() {
               {quizStep===3 && (
                 <div key="s3" className="fu">
                   <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:5}}>
-                    <button onClick={()=>setQuizStep(2)} style={{background:"none",border:"none",color:C.mu,cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontSize:13,fontFamily:"inherit"}}><ChevronLeft size={14}/>Back</button>
+                    <BackBtn onClick={()=>setQuizStep(2)}/>
                   </div>
                   <h2 style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:24,marginBottom:5}}>How soon do you need it?</h2>
                   <p style={{color:C.mu,fontSize:13,marginBottom:20}}>Rush orders apply a multiplier to the base price.</p>
@@ -507,7 +575,7 @@ export default function App() {
               {quizStep===4 && (
                 <div key="s4" className="fu">
                   <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:5}}>
-                    <button onClick={()=>setQuizStep(3)} style={{background:"none",border:"none",color:C.mu,cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontSize:13,fontFamily:"inherit"}}><ChevronLeft size={14}/>Back</button>
+                    <BackBtn onClick={()=>setQuizStep(3)}/>
                   </div>
                   <h2 style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:24,marginBottom:5}}>Any extras?</h2>
                   <p style={{color:C.mu,fontSize:13,marginBottom:20}}>Multi-select {"\u2014"} or skip straight to your estimate.</p>
@@ -530,7 +598,7 @@ export default function App() {
 
               {quizStep===5 && price && (
                 <div key="s5" className="fu">
-                  <button onClick={()=>setQuizStep(1)} style={{display:"flex",alignItems:"center",gap:4,background:"none",border:"none",color:C.mu,cursor:"pointer",fontSize:13,fontFamily:"inherit",marginBottom:14}}><ChevronLeft size={14}/>Reconfigure</button>
+                  <div style={{marginBottom:14}}><BackBtn onClick={()=>setQuizStep(1)} label="Reconfigure"/></div>
 
                   <div style={{display:"flex",gap:7,flexWrap:"wrap",marginBottom:16}}>
                     {[
@@ -581,6 +649,7 @@ export default function App() {
                   </div>
                 </div>
               )}
+            </div>
             </div>
           </>
         )}
@@ -641,7 +710,7 @@ export default function App() {
                 setBookingP={setBookingP} advance={advance} cancelOrd={cancelOrd}
                 setDashTab={setDashTab} dashTab={dashTab}
                 movePort={movePort} togglePortVis={togglePortVis} removePort={removePort}
-                updatePortUrl={updatePortUrl} portUrlEdit={portUrlEdit} setPortUrlEdit={setPortUrlEdit}
+                uploadPortImage={uploadPortImage} uploading={uploading}
                 showNewPort={showNewPort} setShowNewPort={setShowNewPort} newPort={newPort} setNewPort={setNewPort}
                 addPort={addPort} showNewAddon={showNewAddon} setShowNewAddon={setShowNewAddon}
                 newAddon={newAddon} setNewAddon={setNewAddon} addAddon={addAddon}
@@ -689,13 +758,14 @@ export default function App() {
         </div>
       )}
     </div>
+    </div>
   );
 }
 
 function AdminPanel({
   orders, types, addons, portfolio, bookingOpen, setBookingP,
   advance, cancelOrd, dashTab, setDashTab,
-  movePort, togglePortVis, removePort, updatePortUrl, portUrlEdit, setPortUrlEdit,
+  movePort, togglePortVis, removePort, uploadPortImage, uploading,
   showNewPort, setShowNewPort, newPort, setNewPort, addPort,
   showNewAddon, setShowNewAddon, newAddon, setNewAddon, addAddon,
   updateAddon, toggleAddonActive, removeAddon,
@@ -765,7 +835,7 @@ function AdminPanel({
       {dashTab==="portfolio" && (
         <div>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-            <p style={{color:C.mu,fontSize:13}}>Drag order controls affect the carousel cycle. You can paste an image URL for any sample (host on imgbb, imgur, etc.).</p>
+            <p style={{color:C.mu,fontSize:13}}>Order controls affect the carousel cycle. Upload images via the <Image size={11}/> button — resized to 600px WebP thumbnails automatically.</p>
             <button onClick={()=>setShowNewPort(v=>!v)} style={{display:"flex",alignItems:"center",gap:5,padding:"7px 13px",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer",background:C.pBg,border:`1px solid ${C.pBd}`,color:C.p,fontFamily:"inherit"}}><Plus size={13}/> Add Sample</button>
           </div>
 
@@ -773,10 +843,17 @@ function AdminPanel({
             <div style={{background:C.s1,border:`1px solid ${C.pBd}`,borderRadius:12,padding:18,marginBottom:14}}>
               <h4 style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:16,marginBottom:12}}>New portfolio sample</h4>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
-                {[["Title","title","text"],["Category","cat","text"],["Island Code","code","text"],["Plays (e.g. 412K)","plays","text"],["Rating (0\u20135)","rating","text"],["Image URL (optional)","imageUrl","url"]].map(([lbl,field,type])=>(
+                {[["Title","title","text"],["Island Code","code","text"],["Plays (e.g. 412K)","plays","text"],["Rating (0\u20135)","rating","text"]].map(([lbl,field,type])=>(
                   <div key={field}><div style={{fontSize:11,color:C.di,marginBottom:4,letterSpacing:.3,fontWeight:600,textTransform:"uppercase"}}>{lbl}</div>
                     <InlineInput type={type} value={newPort[field]} onChange={e=>setNewPort(f=>({...f,[field]:e.target.value}))}/></div>
                 ))}
+                <div>
+                  <div style={{fontSize:11,color:C.di,marginBottom:4,letterSpacing:.3,fontWeight:600,textTransform:"uppercase"}}>Image</div>
+                  <label style={{display:"flex",alignItems:"center",gap:6,padding:"6px 10px",borderRadius:6,fontSize:12,fontWeight:600,cursor:"pointer",background:C.s1,border:`1px solid ${C.b0}`,color:C.mu,fontFamily:"inherit"}}>
+                    <Image size={13}/> {newPort.file ? newPort.file.name : "Choose image"}
+                    <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>{const f=e.target.files[0];if(f)setNewPort(p=>({...p,file:f}));}}/>
+                  </label>
+                </div>
                 <div><div style={{fontSize:11,color:C.di,marginBottom:4,letterSpacing:.3,fontWeight:600,textTransform:"uppercase"}}>Icon</div>
                   <select value={newPort.iconKey} onChange={e=>setNewPort(f=>({...f,iconKey:e.target.value}))} style={{background:"rgba(255,255,255,.05)",border:`1px solid ${C.b0}`,borderRadius:6,color:C.tx,fontSize:13,padding:"5px 9px",width:"100%"}}>
                     {ICON_KEYS.map(k=><option key={k} value={k}>{k}</option>)}
@@ -792,7 +869,7 @@ function AdminPanel({
                 </div>
               </div>
               <div style={{display:"flex",gap:8}}>
-                <button onClick={addPort} style={{padding:"8px 16px",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer",background:C.p,border:"none",color:"#fff",fontFamily:"inherit"}}>Add</button>
+                <button onClick={addPort} disabled={uploading==="upload"} style={{padding:"8px 16px",borderRadius:8,fontSize:13,fontWeight:600,cursor:uploading==="upload"?"wait":"pointer",background:uploading==="upload"?C.s1:C.p,border:"none",color:"#fff",fontFamily:"inherit"}}>{uploading==="upload"?"Uploading...":"Add"}</button>
                 <button onClick={()=>setShowNewPort(false)} style={{padding:"8px 14px",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer",background:"transparent",border:`1px solid ${C.b0}`,color:C.mu,fontFamily:"inherit"}}>Cancel</button>
               </div>
             </div>
@@ -801,7 +878,6 @@ function AdminPanel({
           <div style={{display:"flex",flexDirection:"column",gap:8}}>
             {[...portfolio].sort((a,b)=>a.order-b.order).map(p=>{
               const Ic=ICON_MAP[p.iconKey]||Wind;
-              const editing = portUrlEdit === p.id;
               return (
                 <div key={p.id} style={{background:C.s0,border:`1px solid ${C.b0}`,borderRadius:10,padding:"11px 14px",display:"flex",alignItems:"center",gap:12,opacity:p.visible?1:.5}}>
                   <div style={{width:36,height:36,borderRadius:8,background:p.imageUrl ? `url(${p.imageUrl}) center/cover` : `linear-gradient(135deg,${p.grad[0]},${p.grad[1]})`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
@@ -809,21 +885,15 @@ function AdminPanel({
                   </div>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontWeight:600,fontSize:13,color:C.tx,marginBottom:1}}>{p.title}</div>
-                    <div style={{fontSize:11,color:C.mu}}>{p.cat} {"\u00b7"} {p.code} {"\u00b7"} {p.plays} plays</div>
-                    {editing ? (
-                      <div style={{display:"flex",gap:4,marginTop:4}}>
-                        <input type="url" defaultValue={p.imageUrl||""} placeholder="https://..." onBlur={e=>{updatePortUrl(p.id,e.target.value);setPortUrlEdit(null);}} autoFocus
-                          style={{flex:1,background:"rgba(255,255,255,.05)",border:`1px solid ${C.b0}`,borderRadius:4,color:C.tx,fontSize:11,padding:"3px 6px",outline:"none"}}
-                          onKeyDown={e=>e.key==="Enter"&&e.target.blur()}/>
-                      </div>
-                    ) : p.imageUrl && (
-                      <div style={{fontSize:10,color:C.a,marginTop:2,display:"flex",alignItems:"center",gap:3}}>
-                        <ExternalLink size={10}/> has image
-                      </div>
+                    <div style={{fontSize:11,color:C.mu}}>{p.code} {"\u00b7"} {p.plays} plays</div>
+                    {p.imageUrl ? (
+                      <div style={{fontSize:10,color:C.a,marginTop:2,display:"flex",alignItems:"center",gap:3}}><Image size={10}/> has image</div>
+                    ) : (
+                      <div style={{fontSize:10,color:C.di,marginTop:2}}>no image</div>
                     )}
                   </div>
                   <div style={{display:"flex",gap:4,alignItems:"center"}}>
-                    <IBtn onClick={()=>setPortUrlEdit(editing?null:p.id)} col={C.a} title="Image URL"><Image size={13}/></IBtn>
+                    <IBtn onClick={()=>uploadPortImage(p.id)} col={C.p} title="Upload image">{uploading===p.id ? <div style={{width:13,height:13,border:"2px solid rgba(255,255,255,.2)",borderTopColor:C.p,borderRadius:"50%",animation:"spin .6s linear infinite"}}/> : <Image size={13}/>}</IBtn>
                     <IBtn onClick={()=>movePort(p.id,-1)} title="Move up"><ChevronUp size={14}/></IBtn>
                     <IBtn onClick={()=>movePort(p.id,1)} title="Move down"><ChevronDown size={14}/></IBtn>
                     <IBtn onClick={()=>togglePortVis(p.id)} title={p.visible?"Hide":"Show"} col={p.visible?C.a:C.di}>{p.visible?<Eye size={14}/>:<EyeOff size={14}/>}</IBtn>
